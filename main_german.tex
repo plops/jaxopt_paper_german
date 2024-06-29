@@ -1,0 +1,312 @@
+Effiziente und Modulare Implizite Differentiation
+
+\subsection{Einleitung}
+
+Automatische Differentiation (Autodiff) hat das maschinelle Lernen revolutioniert.  Es ermöglicht, komplexe Berechnungen durch die Zusammensetzung elementarer Operationen auf kreative Weise auszudrücken und befreit von der Last, ihre Ableitungen von Hand zu berechnen. In jüngerer Zeit hat die Differentiation von Lösungen für Optimierungsprobleme große Aufmerksamkeit auf sich gezogen, mit Anwendungen wie Optimierungsschichten und in zweistufigen Problemen wie der Hyperparameteroptimierung und dem Meta-Learning. Bisher war die implizite Differentiation für Praktiker jedoch schwierig zu handhaben, da sie oft mühsame, fallspezifische mathematische Ableitungen und Implementierungen erforderte. In diesem Artikel stellen wir die \textbf{automatische implizite Differentiation} vor, einen effizienten und modularen Ansatz für die implizite Differentiation von Optimierungsproblemen. Bei unserem Ansatz definiert der Benutzer direkt in Python eine Funktion $F$, die die Optimalitätsbedingungen des zu differenzierenden Problems erfasst. Sobald dies geschehen ist, nutzen wir Autodiff von $F$ und den Satz über implizite Funktionen, um die Lösung des Optimierungsproblems automatisch zu differenzieren. Unser Ansatz kombiniert somit die Vorteile der impliziten Differentiation und von Autodiff. Er ist effizient, da er zu jedem beliebigen modernen Solver hinzugefügt werden kann, und modular, da die Spezifikation der Optimalitätsbedingung vom Mechanismus der impliziten Differentiation entkoppelt ist. Wir zeigen, dass scheinbar einfache Prinzipien es ermöglichen, viele bestehende Methoden der impliziten Differentiation zu reproduzieren und auf einfache Weise neue zu erstellen. Wir demonstrieren die einfache Formulierung und Lösung von zweistufigen Optimierungsproblemen mithilfe unseres Frameworks. Außerdem stellen wir eine Anwendung auf die Sensitivitätsanalyse der Molekulardynamik vor.
+
+\subsection{Automatische Implizite Differentiation}
+\label{sec:framework}
+
+\subsubsection{Allgemeine Prinzipien}
+\label{sec:general_principles}
+
+\paragraph{Überblick.}
+
+Im Gegensatz zur Autodiff durch abgerollte Algorithmusiterationen beinhaltet die implizite Differentiation typischerweise eine manuelle, manchmal komplizierte mathematische Herleitung. So verwenden beispielsweise zahlreiche Arbeiten \cite{chapelle_2002, gould_2016, amos_2017,sparsemap,lp_sparsemap} die Karush-Kuhn-Tucker (KKT)-Bedingungen, um die Lösung eines beschränkten Optimierungsproblems mit seinen Eingaben in Beziehung zu setzen und eine Formel für seine Ableitungen manuell herzuleiten. Die Herleitung und Implementierung in diesen Arbeiten erfolgt typischerweise fallspezifisch.
+
+In dieser Arbeit schlagen wir einen generischen Weg vor, um die implizite Differentiation auf einfache Weise zu bestehenden Solvern hinzuzufügen. Bei unserem Ansatz definiert der Benutzer direkt in Python eine Mapping-Funktion $F$, die die Optimalitätsbedingungen des vom Algorithmus gelösten Problems erfasst. Wir stellen wiederverwendbare Bausteine bereit, um ein solches $F$ einfach auszudrücken. Das bereitgestellte $F$ wird dann in unseren Python-Dekorator \texttt{@custom\_root} eingefügt, den wir der Deklaration des Solvers voranstellen, den wir differenzieren möchten. Unter der Haube kombinieren wir den Satz über implizite Funktionen und die Autodiff von $F$, um die Lösung des Optimierungsproblems automatisch zu differenzieren. Ein einfaches, illustratives Beispiel ist in Abbildung \ref{fig:ridge} dargestellt.
+
+\begin{figure}[t]
+\centering
+\fbox{
+\includegraphics[scale=0.72]{python/ridge}
+}
+\caption{Hinzufügen der impliziten Differentiation zu einem Ridge-Regressions-Solver. Die Funktion $f(x, \theta)$ definiert die Zielfunktion und die Mapping-Funktion $F$, hier einfach Gleichung \eqref{eq:stationary_cond}, erfasst die Optimalitätsbedingungen. Unser Dekorator \texttt{@custom\_root} fügt dem Solver automatisch die implizite Differentiation für den Benutzer hinzu und überschreibt dabei das Standardverhalten von JAX. Die letzte Zeile wertet die Jacobi-Matrix an der Stelle $\theta = 10$ aus.}
+\label{fig:ridge}
+\end{figure}
+
+\paragraph{Differenzieren einer Nullstelle.}
+
+Sei $F \colon \RR^d \times \RR^n \to \RR^d$ eine vom Benutzer bereitgestellte Mapping-Funktion, die die Optimalitätsbedingungen eines Problems erfasst. Eine optimale Lösung, bezeichnet mit $x^\star(\theta)$, sollte eine \textbf{Nullstelle} von $F$ sein:
+\begin{equation}
+F(x^\star(\theta), \theta) = 0\,.
+\label{eq:root_pb}
+\end{equation}
+Wir können $x^\star(\theta)$ als eine implizit definierte Funktion von $\theta \in \RR^n$ betrachten, d. h. $x^\star \colon \RR^n \to \RR^d$.
+Genauer gesagt wissen wir aus dem \textbf{Satz über implizite Funktionen} \cite{griewank_2008,krantz_2012}, dass für $(x_0, \theta_0)$, die $F(x_0, \theta_0) = 0$ mit einem stetig differenzierbaren $F$ erfüllen, und falls die Jacobi-Matrix $\partial_1 F$, ausgewertet an der Stelle $(x_0, \theta_0)$, eine quadratische invertierbare Matrix ist, dann existiert eine Funktion $x^\star(\cdot)$, definiert auf einer Umgebung von $\theta_0$, so dass $x^\star(\theta_0) = x_0$ gilt. Außerdem gilt für alle $\theta$ in dieser Umgebung, dass $F(x^\star(\theta), \theta) = 0$ und $\partial x^\star(\theta)$ existiert.
+%Unser Ziel ist es, $x^\star(\theta)$ nach $\theta$ zu differenzieren.
+Mit der Kettenregel erfüllt die Jacobi-Matrix $\partial x^\star(\theta)$ die Gleichung
+\begin{equation}
+\partial_1 F(x^\star(\theta), \theta) \partial x^\star(\theta) + 
+\partial_2 F(x^\star(\theta), \theta) = 0\,.
+\end{equation}
+Die Berechnung von $\partial x^\star(\theta)$ läuft daher auf die Lösung des linearen Gleichungssystems
+\begin{equation}
+\underbrace{-\partial_1 F(x^\star(\theta), \theta)}_{A \in \RR^{d \times d}} 
+\underbrace{\partial x^\star(\theta)}_{J \in \RR^{d \times n}}
+= \underbrace{\partial_2 F(x^\star(\theta), \theta)}_{B \in \RR^{d \times n}}.
+\label{eq:linear_system_root}
+\end{equation}
+hinaus. Wenn \eqref{eq:root_pb} ein eindimensionales Problem zur Nullstellensuche ist ($d=1$), dann vereinfacht sich \eqref{eq:linear_system_root} zu $\nabla x^\star(\theta) = B^\top / A$, wobei $A$ ein Skalar ist.
+
+Wir werden zeigen, dass sich sowohl bestehende als auch neue Methoden der impliziten Differentiation auf dieses einfache Prinzip zurückführen lassen.
+Wir bezeichnen unseren Ansatz als \textbf{automatische implizite Differentiation}, da der Benutzer die zu differenzierende Lösung des Optimierungsproblems frei über die Optimalitätsbedingungen $F$ ausdrücken kann. Unser Ansatz ist \textbf{effizient}, da er zu jedem beliebigen modernen Solver hinzugefügt werden kann, und \textbf{modular}, da die Spezifikation der Optimalitätsbedingung vom Mechanismus der impliziten Differentiation \textbf{entkoppelt} ist.
+Dies steht im Gegensatz zu bestehenden Arbeiten, bei denen die Herleitung und Implementierung für jede Optimalitätsbedingung spezifisch ist.
+
+\paragraph{Differenzieren eines Fixpunkts.}
+
+Wir werden auf zahlreiche Anwendungen stoßen, bei denen $x^\star(\theta)$ stattdessen implizit durch einen \textbf{Fixpunkt} definiert ist:
+\begin{equation}
+    x^\star(\theta) = T(x^\star(\theta), \theta)\,,
+\end{equation}
+wobei $T \colon \RR^d \times \RR^n \to \RR^d$ gilt.
+Dies kann als ein Spezialfall von \eqref{eq:root_pb} betrachtet werden, indem man das \textbf{Residuum}
+\begin{equation}
+F(x, \theta) = T(x, \theta) - x\,.
+\label{eq:fixed_point_to_root}
+\end{equation}
+definiert. In diesem Fall, wenn $T$ stetig differenzierbar ist, gilt mit der Kettenregel
+\begin{equation}
+A = -\partial_1 F(x^\star(\theta), \theta) = 
+I -\partial_1 T(x^\star(\theta), \theta)
+\quad \text{und} \quad
+B = \partial_2 F(x^\star(\theta), \theta) = 
+\partial_2 T(x^\star(\theta), \theta).
+\end{equation}
+
+\paragraph{Berechnung von JVPs und VJPs.}
+
+In den meisten praktischen Szenarien ist es nicht notwendig, die Jacobi-Matrix explizit zu bilden, sondern es reicht aus, sie von links oder rechts mit $\partial_1 F$ bzw. $\partial_2 F$ zu multiplizieren. Diese Operationen werden als Vektor-Jacobi-Produkt (VJP) bzw. Jacobi-Vektor-Produkt (JVP) bezeichnet und sind nützlich, um $x^\star(\theta)$ in die Autodiff im Rückwärts- bzw. Vorwärtsmodus zu integrieren.
+Oftmals ist $F$ explizit definiert. In diesem Fall kann die Berechnung des VJP oder JVP mittels Autodiff erfolgen. 
+In einigen Fällen kann $F$ selbst implizit definiert sein, z. B. wenn $F$ die Lösung eines Variationsproblems beinhaltet. In diesem Fall beinhaltet die Berechnung des VJP oder JVP selbst eine implizite Differentiation.
+
+Die Multiplikation von rechts (JVP) zwischen $J = \partial x^\star(\theta)$ und einem Vektor $v$, $Jv$, kann effizient durch Lösen von $A (Jv) = Bv$ berechnet werden. 
+Die Multiplikation von links (VJP) von $v^\top$ mit $J$, $v^\top J$, kann berechnet werden, indem man zunächst $A^\top u = v$ löst. Dann können wir $v^\top J$ durch $v^\top J = u^\top A J = u^\top B$ erhalten. 
+Beachten Sie, dass wir $A^\top u = v$ nicht erneut lösen müssen, wenn sich $B$ ändert, aber $A$ und $v$ gleich bleiben. Dies ermöglicht es, den VJP in Bezug auf verschiedene Variablen zu berechnen, während nur ein lineares System gelöst werden muss.
+
+Um diese linearen Systeme zu lösen, können wir das Verfahren der konjugierten Gradienten \cite{conjugate_gradient} verwenden, wenn $A$ symmetrisch positiv semidefinit ist, und GMRES \cite{saad_1986} oder BiCGSTAB \cite{Vorst1992-bicgstab}, wenn dies nicht der Fall ist. Diese Algorithmen sind alle matrixfrei: Sie benötigen nur Matrix-Vektor-Produkte. Daher benötigen wir von $F$ nur seine JVPs oder VJPs.  Eine Alternative zu GMRES/BiCGSTAB ist die Lösung der Normalengleichung $A A^\top u = A v$ mit dem Verfahren der konjugierten Gradienten.  Dies kann mit der Transpositionsroutine \texttt{jax.linear\_transpose} von JAX \cite{frostig2021decomposing} implementiert werden.
+Im Falle von Nicht-Invertierbarkeit besteht eine gängige Heuristik darin, stattdessen ein Problem der kleinsten Quadrate $\min_J \|AJ-B\|^2$ zu lösen.
+
+\paragraph{Präprozessing- und Postprozessing-Mappings.}
+
+Oftmals ist es nicht das Ziel, $\theta$ an sich zu differenzieren, sondern die Parameter einer Funktion, die $\theta$ erzeugt. Ein Beispiel für ein solches Präprozessing ist die Umwandlung der zu differenzierenden Parameter von einer Form in eine andere kanonische Form, z. B. ein quadratisches Programm \cite{amos_2017} oder ein konisches Programm \cite{agrawal_2019}. 
+Ein weiteres Beispiel ist, wenn $x^\star(\theta)$ als Ausgabe einer neuronalen Netzwerkschicht verwendet wird, wobei $\theta$ von der vorherigen Schicht erzeugt wird. Ebenso wird $x^\star(\theta)$ oft nicht die endgültige Ausgabe sein, die wir differenzieren wollen.
+Ein Beispiel für ein solches Postprozessing ist, wenn $x^\star(\theta)$ die Lösung eines dualen Programms ist und wir die Dual-Primal-Transformation anwenden, um die Lösung des primalen Programms zu erhalten. Ein weiteres Beispiel ist die Anwendung einer Verlustfunktion, um $x^\star(\theta)$ auf einen skalaren Wert zu reduzieren. Wir überlassen die Differentiation solcher Prä-/Postprozessing-Mappings dem Autodiff-System, wodurch die Verkettung von Funktionen auf komplexe Weise möglich ist.
+
+\paragraph{Implementierungsdetails.}
+
+%Unsere Implementierung basiert auf JAX \cite{jax, frostig2018compiling}.  Die Autodiff-Funktionen von JAX kommen auf mindestens zwei Arten ins Spiel: (i) Wir stützen uns stark auf JAX \emph{innerhalb} unserer Implementierung, und (ii) wir integrieren die von unserem Framework eingeführten Differentiationsroutinen \emph{in} das bestehende Autodiff-System von JAX.
+%Dadurch überschreiben wir das Standardverhalten von JAX bei der Autodiff (z. B. die transparente Differentiation durch die abgerollteten Iterationen eines iterativen Solvers).
+%
+%Innerhalb der Implementierung des Frameworks stützen wir uns auf JAX für die Differentiation verschiedener Unterroutinen, wie z. B. das vom Benutzer bereitgestellte Optimalitätskriterium $F$.
+%Wir rufen diese als Teil der effizienten ``benutzerdefinierten'' Differentiationsroutinen auf, die wir mit den Lösungen des Optimierungsproblems verknüpfen, wodurch wir das Standardverhalten von JAX überschreiben.
+%
+%Auf Seiten des Endbenutzers verwenden Programmierer JAX wie gewohnt.
+%Bei der Differentiation von Programmen, die das Lösen von Optimierungsproblemen beinhalten, ersetzen unsere effizienten benutzerdefinierten Ableitungen das Standardverhalten von JAX (typischerweise die Differentiation durch die Implementierung des Solvers).
+
+Wenn eine Solver-Funktion mit \texttt{@custom\_root} dekoriert wird, verwenden wir \texttt{jax.custom\_jvp} und \texttt{jax.custom\_vjp}, um der Funktion automatisch benutzerdefinierte JVP- und VJP-Regeln hinzuzufügen, wodurch das Standardverhalten von JAX überschrieben wird.
+Wie oben erwähnt, verwenden wir lineare Systemlöser, die auf Matrix-Vektor-Produkten basieren, und daher benötigen wir nur Zugriff auf $F$ über den JVP oder VJP mit $\partial_1 F$ bzw. $\partial_2 F$. Dies geschieht durch die Verwendung von \texttt{jax.jvp} bzw. \texttt{jax.vjp}. Beachten Sie, dass, wie in Abbildung \ref{fig:ridge} dargestellt, die Definition von $F$ oft eine Gradientenabbildung $\nabla_1 f(x, \theta)$ beinhaltet.
+Glücklicherweise unterstützt JAX Ableitungen zweiter Ordnung auf transparente Weise.  Der Einfachheit halber bietet unsere Bibliothek auch einen \texttt{@custom\_fixed\_point}-Dekorator an, um die implizite Differentiation zu einem Solver hinzuzufügen, wenn eine Fixpunktiteration $T$ gegeben ist; siehe Codebeispiele in Anhang \ref{appendix:code_examples}.  
+
+\begin{table}[t]
+\caption{Zusammenfassung der Optimalitätsbedingungs-Mappings. Auf Orakel wird über ihren JVP oder VJP zugegriffen.
+%Siehe auch Anhang \ref{appendix:more_fixed_points}.
+}
+\begin{center}
+\begin{small}
+\begin{tabular}{cccc}
+\toprule
+Name & Gleichung & Benötigte Lösung & Orakel \\
+\midrule
+Stationär & \eqref{eq:stationary_cond}, \eqref{eq:gradient_descent_fp} & 
+Primal & $\nabla_1 f$ \\
+KKT & \eqref{eq:kkt_conditions} & Primal \textit{und} Dual & 
+$\nabla_1 f$, $H$, $G$, $\partial_1 H$, $\partial_1 G$ \\
+Proximaler Gradient & \eqref{eq:proximal_grad_fp} & Primal & 
+$\nabla_1 f$, $\prox_{\eta g}$ \\
+Projizierter Gradient & \eqref{eq:proj_grad_fp} & Primal & $\nabla_1 f$, 
+$\proj_{\cC}$ \\
+Spiegelabstieg & \eqref{eq:mirror_descent_fp} & Primal & $\nabla_1 f$,
+$\proj_\cC^\varphi$, $\nabla \varphi$ \\
+Newton & \eqref{eq:newton_opt_fp} & Primal &
+$[\nabla^2_1 f(x, \theta)]^{-1}$, $\nabla_1 f(x, \theta)$ \\
+Blockweiser proximaler Gradient & \eqref{eq:bcd_fp} & Primal &
+$[\nabla_1 f]_j$, $[\prox_{\eta g}]_j$ \\
+Konische Programmierung & \eqref{eq:residual_map} & Nullstelle der Residuenabbildung & 
+$\proj_{\RR^p \times \cK^* \times \RR_+}$ \\
+\bottomrule
+\end{tabular}
+\end{small}
+\end{center}
+\label{tab:mapping_summary}
+\end{table}
+
+\subsubsection{Beispiele}
+\label{sec:mapping_examples}
+
+Wir geben nun verschiedene Beispiele für die Mapping-Funktion $F$ oder die Fixpunktiteration $T$ an, wobei wir bestehende Methoden der impliziten Differentiation reproduzieren und neue erstellen.
+Jede Wahl von $F$ oder $T$ impliziert unterschiedliche Kompromisse in Bezug auf die \textbf{Berechnungsorakel}; siehe Tabelle \ref{tab:mapping_summary}. 
+Quellcodebeispiele finden Sie in Anhang \ref{appendix:code_examples}.
+
+\paragraph{Stationaritätsbedingung.}
+
+Das einfachste Beispiel ist die Differentiation durch die implizite Funktion
+\begin{equation}
+x^\star(\theta) = \argmin_{x \in \RR^d} f(x, \theta),
+\end{equation}
+wobei $f \colon \RR^d \times \RR^n \to \RR$ zweimal differenzierbar ist, $\nabla_1 f$ stetig differenzierbar ist und $\nabla^2_1 f$ an der Stelle $(x^\star(\theta),\theta)$ invertierbar ist.
+In diesem Fall ist $F$ einfach die Gradientenabbildung
+\begin{equation}
+F(x, \theta) = \nabla_1 f(x, \theta).
+\label{eq:stationary_cond}
+\end{equation}
+Wir haben dann
+$\partial_1 F(x, \theta) = \nabla^2_1 f(x, \theta)$
+und
+$\partial_2 F(x, \theta) = \partial_2 \nabla_1 f(x, \theta)$,
+die Hesse-Matrix von $f$ in Bezug auf ihr erstes Argument und die Jacobi-Matrix von $\nabla_1 f(x, \theta)$ in Bezug auf ihr zweites Argument. In der Praxis verwenden wir Autodiff, um Jacobi-Produkte automatisch zu berechnen.
+Äquivalent dazu können wir den \textbf{Gradientenabstiegs-Fixpunkt}
+\begin{equation}
+T(x, \theta) = x - \eta \nabla_1 f(x, \theta),
+\label{eq:gradient_descent_fp}
+\end{equation}
+für alle $\eta > 0$ verwenden. Mit \eqref{eq:fixed_point_to_root} lässt sich leicht überprüfen, dass wir dasselbe lineare System erhalten, da sich $\eta$ herauskürzt.
+
+\paragraph{KKT-Bedingungen.}
+
+Als ein komplexeres Beispiel zeigen wir nun, dass die KKT-Bedingungen, die in mehreren Arbeiten manuell differenziert wurden \cite{chapelle_2002,gould_2016,amos_2017,sparsemap,lp_sparsemap}, in unser Framework passen. Wie wir sehen werden, besteht der Schlüssel darin, die optimalen primalen und dualen Variablen als unser $x^\star(\theta)$ zusammenzufassen. Betrachten wir das allgemeine Problem
+\begin{equation}
+\argmin_{z \in \RR^p} f(z, \theta)
+\quad \text{unter der Bedingung} \quad
+G(z, \theta) \le 0,
+~ H(z, \theta) = 0,
+\label{eq:generic_constrained_pb}
+\end{equation}
+wobei $z \in \RR^p$ die primale Variable ist,
+$f \colon \RR^p \times \RR^n \to \RR$,
+$G \colon \RR^p \times \RR^n \to \RR^r$
+und $H \colon \RR^p \times \RR^n \to \RR^q$
+%{\textcolor{red}{alle in $\mathcal{C}^1$}}.
+zweimal differenzierbare konvexe Funktionen sind und $\nabla_1 f$, $\partial_1 G$ und $\partial_1 H$ stetig differenzierbar sind. Die Stationaritäts-, primale Zulässigkeits- und komplementäre Slackness-Bedingungen lauten
+\begin{align}
+\nabla_1 f(z, \theta) + [\partial_1 G(z, \theta)]^\top \lambda + 
+[\partial_1 H(z, \theta)]^\top \nu = 0 \\
+H(z, \theta) = 0 \\
+\lambda \circ G(z, \theta) = 0,
+\label{eq:kkt_conditions}
+\end{align}
+wobei $\nu \in \RR^q$ und $\lambda \in \RR^r_+$ die dualen Variablen sind, auch bekannt als KKT-Multiplikatoren.
+Die primale und duale Zulässigkeitsbedingung kann fast überall ignoriert werden \cite{tutorial_implicit}.
+Das System von (möglicherweise nichtlinearen) Gleichungen \eqref{eq:kkt_conditions} passt in unser Framework, da wir die primalen und dualen Lösungen als $x^\star(\theta) = (z^\star(\theta), \nu^\star(\theta), \lambda^\star(\theta))$ zusammenfassen können, um die Nullstelle einer Funktion $F(x^\star(\theta), \theta)$ zu bilden, wobei $F \colon \RR^d \times \RR^n \to \RR^d$ und $d = p + q + r$ gilt. Die primalen und dualen Lösungen können mit einem generischen Solver, wie z. B. einem Innere-Punkte-Verfahren, ermittelt werden.
+In der Praxis wird die obige Mapping-Funktion $F$ direkt in Python definiert (siehe Abbildung \ref{fig:kkt_code} in Anhang \ref{appendix:code_examples}) und $F$ wird automatisch mittels Autodiff differenziert.
+
+\paragraph{Fixpunkt des proximalen Gradienten.}
+
+Leider geben nicht alle Algorithmen sowohl primale als auch duale Lösungen zurück. 
+Darüber hinaus kann der proximale Gradientenabstieg effizienter sein, wenn die Zielfunktion nicht-glatte Terme enthält.
+Wir diskutieren nun seinen Fixpunkt \cite{niculae_2017, bertrand_2020_implicit, bertrand_2021_journal}.
+Sei $x^\star(\theta)$ implizit definiert als
+\begin{equation}
+x^\star(\theta) \coloneqq \argmin_{x \in \RR^d} f(x, \theta) + g(x, \theta),
+\label{eq:composite_pb}
+\end{equation}
+wobei $f \colon \RR^d \times \RR^n \to \RR$ zweimal differenzierbar konvex und $g \colon \RR^d \times \RR^n \to \RR$ konvex, aber möglicherweise nicht glatt ist.
+Definieren wir den Proximaloperator, der zu $g$ gehört, durch
+\begin{equation}
+\prox_g(y, \theta) \coloneqq 
+\argmin_{x \in \RR^d} \frac{1}{2} \|x - y\|^2_2 + g(x, \theta).
+\end{equation}
+Um $x^\star(\theta)$ implizit zu differenzieren, verwenden wir die Fixpunktabbildung \cite[p.150]{parikh_2014}
+\begin{equation}
+T(x, \theta) = \prox_{\eta g}(x - \eta \nabla_1 f(x, \theta), \theta),
+\label{eq:proximal_grad_fp}
+\end{equation}
+für eine beliebige Schrittweite $\eta > 0$.
+Der Proximaloperator ist 1-Lipschitz-stetig \cite{Moreau1965Proximite}. Nach dem Satz von Rademacher ist er fast überall differenzierbar. Wenn er zusätzlich in einer Umgebung von $(x^\star(\theta),\theta)$ stetig differenzierbar ist und $I - \partial_1 T(x^\star(\theta),\theta)$ invertierbar ist, dann lässt sich unser Framework zur Differentiation von $x^\star(\theta)$ anwenden. Ähnliche Annahmen werden in \cite{bertrand_2021_journal} getroffen.
+Viele Proximaloperatoren haben eine geschlossene Form und können leicht differenziert werden, wie in Anhang \ref{appendix:jac_prod} erläutert wird. Eine Implementierung ist in Abbildung \ref{fig:pg_fixed_point} dargestellt.
+
+\paragraph{Fixpunkt des projizierten Gradienten.} 
+
+Als Spezialfall erhalten wir, wenn $g(x, \theta)$ die Indikatorfunktion $I_{\cC(\theta)}(x)$ ist, wobei $\cC(\theta)$ eine konvexe Menge in Abhängigkeit von $\theta$ ist,
+\begin{equation}
+x^\star(\theta) = \argmin_{x \in \cC(\theta)} f(x, \theta).
+\label{eq:constrained_pb}
+\end{equation}
+Der Proximaloperator $\prox_g$ wird zur euklidischen Projektion auf $\cC(\theta)$
+\begin{equation}
+\prox_g(y, \theta) =
+\proj_{\cC}(y, \theta) \coloneqq
+\argmin_{x \in \cC(\theta)} \|x - y \|^2_2
+\label{eq:projection}
+\end{equation}
+und \eqref{eq:proximal_grad_fp} wird zum Fixpunkt des projizierten Gradienten
+\begin{equation}
+T(x, \theta) = \proj_{\cC}(x - \eta \nabla_1 f(x, \theta), \theta).
+\label{eq:proj_grad_fp}
+\end{equation}
+Im Vergleich zu den KKT-Bedingungen eignet sich dieser Fixpunkt besonders dann, wenn die Projektion eine geschlossene Form besitzt.
+Wir erläutern in Anhang \ref{appendix:jac_prod}, wie man den JVP / VJP für eine Vielzahl konvexer Mengen berechnet. 
+
+\begin{figure}[t]
+\centering
+\fbox{
+\includegraphics[scale=0.8]{python/prox_grad}
+}
+\caption{Implementierung des Fixpunkts des proximalen Gradienten \eqref{eq:proximal_grad_fp} mit Schrittweite $\eta=1$.}
+\label{fig:pg_fixed_point}
+\end{figure}
+
+\paragraph{Aktuelle Einschränkungen.}
+
+Obwohl wir in der Praxis keine Probleme beobachtet haben, stellen wir fest, dass der in diesem Abschnitt entwickelte Ansatz theoretisch nur auf Situationen anwendbar ist, in denen der Satz über implizite Funktionen gültig ist, d. h. wenn die Optimalitätsbedingungen die in \S\ref{sec:general_principles} genannten Differenzierbarkeits- und Invertierbarkeitsbedingungen erfüllen. Während dies eine breite Palette von Situationen abdeckt, selbst für nicht-glatte Optimierungsprobleme (z. B. kann die Lösung einer Lasso-Regression unter milden Annahmen f.ü. in Bezug auf den Regularisierungsparameter differenziert werden, siehe Anhang~\ref{sec:lasso}), ist eine interessante Richtung für zukünftige Arbeiten die Erweiterung des Frameworks auf Fälle, in denen die Differenzierbarkeits- und Invertierbarkeitsbedingungen nicht erfüllt sind, z. B. unter Verwendung der Theorie der nicht-glatten Sätze über implizite Funktionen \cite{Clarke1983Optimization,Bolte2021Nonsmooth}.
+
+\subsection{Jacobi-Präzisionsgarantien}
+\label{sec:jac_bounds}
+
+%In Abschnitt~\ref{sec:framework} und in diesem Abschnitt stellen wir Methoden zur Berechnung von Gradienten vor, die auf einer bestehenden Theorie basieren, und geben Garantien an, die unter bestimmten Annahmen gelten. Wir stellen auch Anwendungsfälle ohne diese Annahmen in Abschnitt~\ref{sec:exp} vor und zeigen gute empirische Ergebnisse. Diese Situation ist im modernen maschinellen Lernen weit verbreitet: Die Darstellung von Methoden in der stochastischen Optimierung folgt häufig diesem Muster. Das Aufzeigen theoretischer Ergebnisse unter theoretischen Bedingungen und empirischer Ergebnisse in viel breiteren Situationen (von Interesse für Praktiker) kann informativ sein, und wir halten es für sinnvoll, sie zusammen zu präsentieren.
+
+In der Praxis erreichen wir, entweder durch die Grenzen der Gleitkommaarithmetik oder weil wir eine endliche Anzahl von Iterationen durchführen, selten die exakte Lösung $x^\star(\theta)$. Stattdessen erreichen wir eine Näherungslösung $\hat{x}$ und wenden die Gleichung für die implizite Differentiation \eqref{eq:linear_system_root} auf diese Näherungslösung an. Dies motiviert die Notwendigkeit von Präzisionsgarantien für diesen Ansatz. Wir führen den folgenden Formalismus ein.
+
+\begin{definition}
+\label{DEF:jac-est}
+Sei $F:\RR^d \times \RR^n \to \RR^d$ eine stetig differenzierbare Optimalitätskriterium-Mapping-Funktion.
+Sei $A \coloneqq -\partial_1 F$ und $B \coloneqq \partial_2 F$.
+Wir definieren die \textbf{Jacobi-Schätzung} an der Stelle $(x, \theta)$, wenn $A(x,\theta)$ invertierbar ist, als die Lösung der linearen Gleichung
+$A(x, \theta) J(x, \theta) = B(x, \theta)$.
+Es handelt sich um eine Funktion $J: \RR^d \times \RR^n \to \RR^{d \times n}$.
+\end{definition}
+Es gilt per Konstruktion, dass
+$J(x^\star(\theta), \theta) = \partial x^\star(\theta)$ ist.
+Die Berechnung von $J(\hat x, \theta)$ für eine Näherungslösung $\hat x$ von $x^\star(\theta)$ ermöglicht es daher, die wahre Jacobi-Matrix $\partial x^\star(\theta)$ zu approximieren. In der Praxis hängt ein Algorithmus, der zur Lösung von \eqref{eq:root_pb} verwendet wird, von $\theta$ ab. Beachten Sie jedoch, dass wir nicht die Jacobi-Matrix von $\hat x(\theta)$ berechnen, im Gegensatz zu Arbeiten, die durch abgerollte Algorithmusiterationen differenzieren, sondern eine Schätzung von $\partial x^\star(\theta)$. Wir verwenden daher die Notation $\hat x$, wobei die Abhängigkeit von $\theta$ implizit bleibt.
+
+Wir entwickeln Schranken der Form $\|J(\hat{x}, \theta) - \partial x^\star(\theta)\| < C \|\hat x - x^\star(\theta)\|$ und zeigen damit, dass der Fehler der geschätzten Jacobi-Matrix höchstens von der gleichen Ordnung ist wie der von $\hat x$ als Approximation von $x^{\star}(\theta)$. Diese Schranken basieren auf dem folgenden Hauptsatz, dessen Beweis in Anhang \ref{appendix:proofs} enthalten ist.
+\begin{theorem}\label{thm:jacob}
+Sei $F:\RR^d \times \RR^n \to \RR^d$ stetig differenzierbar. Wenn es $\alpha, \beta, \gamma, \varepsilon, R>0$ gibt, so dass $A = -\partial_1 F$ und $B = \partial_2 F$ für alle $v\in\RR^d$, $\theta \in \RR^n$ und $x$ mit $\|x - x^\star(\theta)\| \le \varepsilon$ folgendes erfüllen:
+
+$A$ ist gut konditioniert, Lipschitz-stetig: $\|A(x, \theta) v \| \ge \alpha \|v\|$, $\|A(x, \theta) - A(x^\star(\theta), \theta)\|_{\textnormal{op}} \le \gamma \|x - x^\star(\theta)\|$.
+
+$B$ ist beschränkt und Lipschitz-stetig: $\|B(x^\star(\theta), \theta)\| \le R$, $\|B(x, \theta) - B(x^\star(\theta), \theta)\| \le \beta \|x - x^\star(\theta)\|$.
+
+Unter diesen Bedingungen gilt für $\|\hat x - x^\star(\theta)\| \le \varepsilon$, dass
+\[
+\|J(\hat x, \theta) - \partial x^\star (\theta)\| \le \left(\beta\alpha^{-1} + \gamma R \alpha^{-2}\right) \|\hat x - x^\star(\theta)\|
+\]
+ist.
+\end{theorem}
+
+
+
+% %\qberthet{Dieses Ergebnis ist allgemeiner, aber weniger transparent als das ursprüngliche Ergebnis. Ich habe auch eine etwas andere Schranke für die Differenz der inversen Matrizen verwendet. Gerne können wir besprechen, welche wir verwenden wollen.}
+
+% %\jpvert{In der Literatur, z. B. \cite{pedregosa2016hyperparameter,bertrand_2021_journal}, wird üblicherweise eine andere klassische Schranke für die Differenz zwischen Lösungen eines gestörten linearen Systems verwendet, die aus \cite[Theorem 7.2]{Higham2002Accuracy} stammt. Mit den Notationen aus Theorem \ref{thm:jacob} lautet sie:
+% \[
+% \|J(\hat x, \theta) - \partial_\theta x^\star (\theta)\| \le\frac{\beta + \gamma\alpha R}{\alpha - \epsilon \gamma} \epsilon = O(\epsilon) \, .
+% \]
+% Der Unterschied zu Theorem \ref{thm:jacob} besteht darin, dass diese Schranke unter schwächeren Annahmen gilt, nämlich der Tatsache, dass nur $A_\star$ gut konditioniert ist ($\|A_\star^{-1}\| \leq \alpha^{-1}$), während Theorem \ref{thm:jacob} auch erfordert, dass $\hat{A}$ gut konditioniert ist. Da am Ende beide Schranken $O(\epsilon)$ sind, sehe ich keinen Mehrwert darin, eine neue Schranke unter stärkeren Bedingungen als der Standard-Schranke zu beweisen, und würde vorschlagen, einfach die klassische Schranke aus \cite[Theorem 7.2]{Higham2002Accuracy} zu verwenden.
+% }
+% \qberthet{
+% Ich denke, es kann durch das obige Ergebnis und die obige Analyse ersetzt werden, die erste Annahme ist schwächer, aber die Bedingung an $\|\hat x - x^\star(\theta)\|$ ist stärker. Als ich den gleichen Weg wie im Beweis von \cite[Theorem 7.2]{Higham2002Accuracy} beschritten habe, erhielt ich
+% \[
+% \|J(\hat x, \theta) - \partial_\theta x^\star (\theta)\| \le\frac{\beta + \gamma R /\alpha}{\alpha - \varepsilon \gamma} \varepsilon\, .
+% \] 
+%
